@@ -1,0 +1,54 @@
+create kubernetes
+
+mkdir istio
+cd istio
+curl -L https://istio.io/downloadIstio | sh -
+cd istio-version
+export PATH="$PATH:/home/lilia/Istio/istio-version/bin"
+istioctl install
+#Label the namespace that will host the application with istio-injection=enabled:
+kubectl label namespace default istio-injection=enabled
+
+
+#Deploy your application using the kubectl command:
+kubectl apply -f samples/bookinfo/platform/kube/bookinfo.yaml
+kubectl get pods
+kubectl get svc -n istio-system
+
+
+#you need to make the application accessible from outside of your Kubernetes cluster, e.g., from a browser. A gateway is used for this purpose.
+kubectl apply -f samples/bookinfo/gateway-api/bookinfo-gateway.yaml
+
+
+#Because creating a Kubernetes Gateway resource will also deploy an associated proxy service, run the following command to wait for the gateway to be ready:
+kubectl wait --for=condition=programmed gtw bookinfo-gateway
+
+#Get the gateway address and port from the bookinfo gateway resource:
+export INGRESS_HOST=$(kubectl get gtw bookinfo-gateway -o jsonpath='{.status.addresses[0].value}')
+export INGRESS_PORT=$(kubectl get gtw bookinfo-gateway -o jsonpath='{.spec.listeners[?(@.name=="http")].port}')
+
+#Set GATEWAY_URL:
+export GATEWAY_URL=$INGRESS_HOST:$INGRESS_PORT
+
+#To confirm that the Bookinfo application is accessible from outside the cluster, run the following curl command:
+curl -s "http://${GATEWAY_URL}/productpage" | grep -o "<title>.*</title>"
+
+
+
+cd samples
+ls
+cd addons
+ls
+cd ..
+kubectl apply -f addons/
+istioctl dashboard Prometheus
+istioctl dashboard Grafana
+istioctl dashboard jaeger
+istioctl dashboard kiali
+
+
+kubectl delete -f samples/addons
+istioctl uninstall -y --purge
+kubectl delete namespace istio-system
+kubectl label namespace default istio-injection-
+

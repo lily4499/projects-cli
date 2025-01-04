@@ -1,0 +1,238 @@
+1- Create RDS MYSQL Database from the AWS Console or use Terraform
+
+provider "aws" {
+  region = "us-east-1" # Replace with your desired region
+}
+
+resource "aws_db_instance" "my_database" {
+  identifier           = "source-db"
+  allocated_storage    = 20
+  storage_type         = "gp2"
+  engine               = "mysql"
+  engine_version       = "5.7" # Replace with your desired MySQL version
+  instance_class       = "db.t3.micro" # Replace with your desired instance type
+  username             = "admin" # Replace with your desired username
+  password             = "abc123abc" # Replace with your desired password
+  parameter_group_name = "default.mysql5.7" # Replace with your desired parameter group
+
+
+  # Replace with your preferred settings for the following parameters if needed
+  skip_final_snapshot = true
+  publicly_accessible = true
+}
+
+
+
+# Output the RDS endpoint and security group ID
+output "rds_endpoint" {
+  value = aws_db_instance.my_database.endpoint
+}
+
+--------------------------------
+
+mysql -h hostname -u username -p
+
+CREATE DATABASE employeedb;
+
+USE employeedb;
+
+CREATE TABLE employee (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL
+);
+
+
+INSERT INTO employee (email, first_name, last_name) 
+VALUES ('john.doe@example.com', 'John', 'Doe');
+
+INSERT INTO employee (email, first_name, last_name) VALUES
+('john.doe@example.com', 'John', 'Doe'),
+('jane.smith@example.com', 'Jane', 'Smith'),
+('robert.brown@example.com', 'Robert', 'Brown'),
+('linda.jones@example.com', 'Linda', 'Jones'),
+('michael.johnson@example.com', 'Michael', 'Johnson'),
+('emily.davis@example.com', 'Emily', 'Davis'),
+('william.miller@example.com', 'William', 'Miller'),
+('sarah.wilson@example.com', 'Sarah', 'Wilson'),
+('david.moore@example.com', 'David', 'Moore'),
+('laura.taylor@example.com', 'Laura', 'Taylor');
+
+
+SELECT * FROM employee;
+
+=================================================================
+
+2-Setup Backend (springboot app)
+
+Create ec2 and ssh
+adduser spring
+usermod -aG sudo spring
+su - spring
+ sudo apt-get update -y
+     sudo apt-get upgrade -y
+     sudo apt install openjdk-17-jdk openjdk-17-jre -y
+sudo apt install maven -y
+
+# nodejs install link  ---- https://github.com/nodesource/distributions
+sudo apt-get install -y curl
+curl -fsSL https://deb.nodesource.com/setup_23.x -o nodesource_setup.sh
+sudo -E bash nodesource_setup.sh
+sudo apt-get install -y nodejs
+node -v
+npm
+node
+
+
+
+3- Clone source code - Build jar file -Copy Jar file to Prod Server-connect backend to frontend
+
+git clone https://github.com/lily4499/employee-app.git
+cd employee-app
+cd employeemanagmentbackend
+mvn clean install -DskipTests
+
+vim src/main/resources/application.properties
+###Update DB information on MYSQL############################
+
+mvn clean install -DskipTests
+
+browser= IP:8080/employee
+
+==============================================
+
+4- Set up front (react app)
+
+cd employeemanagement-frontend
+#############Connect frontend backend
+vim employee-app/employeemanagement-frontend/src/service/EmployeeService.js
+#Update BASE_URL = "http://IP:8080/employee"
+
+npm install
+npm start
+
+browser = IP:3000
+
+=================================================
+
+run the backend in background using systemd, dont need to press CRTL C to use terminal
+su - spring
+cd employeemanagmentbackend
+cd target
+pwd
+
+sudo nano /etc/systemd/system/spring.service 
+
+
+Copy and Paste below Content, replace jar file path with yours and also the user
+
+[Unit]
+Description=Spring init sample
+After=syslog.target
+[Service]
+User= spring
+Restart=always
+RestartSec=30s
+ExecStart=/usr/bin/java -jar /home/spring/employee-app/employeemanagmentbackend/target/employeemanagmentbackend-0.0.1-SNAPSHOT.jar SuccessExitStatus=143
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl enable spring.service
+sudo systemctl start spring.service
+sudo systemctl status spring
+
+
+=================================================================
+
+#Use Nginx to serve both frontend and backend
+
+sudo apt install nginx -y
+sudo systemctl status nginx
+sudo ufw enable
+suod ufw app list
+sudo ufw allow "nginx Full"
+sudo ufw allow 22 8080
+
+browser = IP -> nginx welcome page
+
+sudo mkdir -p /var/www/front
+
+cd employeemanagement-frontend
+npm run build
+ls build
+cp -r build/* /var/www/front/
+ls /var/www/front
+
+
+touch /etc/nginx/sites-available/spring
+vim /etc/nginx/sites-available/spring
+server {
+ listen 80;
+ server_name  lilianedevops.online react.lilianedevops.online www.lilianedevops.online;
+
+location / {
+ root /var/www/front;
+ index  index.html index.htm;
+ proxy_http_version 1.1;
+ proxy_set_header Upgrade $http_upgrade;
+ proxy_set_header Connection 'upgrade';
+ proxy_set_header Host $host;
+ proxy_cache_bypass $http_upgrade;
+ try_files $uri $uri/ /index.html;
+ }
+}
+
+server {
+  listen 80;
+  server_name spring.lilianedevops.online;
+  location / {
+    proxy_pass http://161.35.161.173:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_cache_bypass $http_upgrade;
+    }
+}
+
+
+sudo nginx -t
+
+----------
+
+Create A Record
+Hostname = frontoct, springlil, 
+Go on browser to open hostname= frontoct.lilianedevops.online
+
+sudo ln -s /etc/nginx/sites-available/spring /etc/nginx/sites-enable/spring
+sudo systemctl restart nginx
+
+========================================================================
+
+Install cerbot to secure Application
+
+sudo snap install core; sudo snap refresh core
+sudo apt remove certbot 
+sudo snap install --classic certbot
+sudo ln -s /snap/bin/certbot /usr/bin/certbot
+sudo certbot --nginx -d react.lilianedevops.online -d spring.lilianedevops.online 
+
+
+=============================================================================
+
+ RECONFIGURE YOUR EMPLOYEE.JS FILE TO REFLECT LATEST CHANGES
+
+vim employee-app/employeemanagement-frontend/src/service/EmployeeService.js
+#Update BASE_URL = "http://spring.lilianedevops.online/employee"
+
+
+cd employeemanagement-frontend
+sudo cp -r build/* /var/www/front
+
+
+=======================================================
+
+
+clean up[]

@@ -1,0 +1,134 @@
+For simplicity:
+
+    Use MySQL or PostgreSQL.
+    Prepopulate the database with a set of sample products.
+
+Workflow:
+
+    Frontend:
+        A React app that interacts with the backend through REST APIs.
+        For instance, a GET /products call fetches product details.
+        Hosted on S3 as a static website.
+
+    Backend:
+        A Node.js server with routes for different operations (e.g., /login, /products, /checkout).
+        Deployed on EC2 instances behind an Application Load Balancer (ALB).
+
+    Database:
+        Handles all the data interactions.
+        Backend connects to the RDS instance for CRUD operations.
+
+
+
+Example Application:
+
+You can create a basic e-commerce project with the following features:
+
+    Homepage: Displays a list of products.
+    Product Details Page: Shows product descriptions, images, and prices.
+    Cart: Allows users to add/remove items and see a total price.
+    Checkout: Users enter payment details (mocked for simplicity) and place an order.
+
+============================================================================================
+
+Mysql running on local machine
+
+# create the database and tables
+
+CREATE DATABASE ecommerce;
+USE ecommerce;
+CREATE TABLE products (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    price DECIMAL(10, 2) NOT NULL,
+    image_url VARCHAR(255)
+);
+INSERT INTO products (name, description, price, image_url)
+VALUES
+('Laptop', 'A high-performance laptop', 1200.00, 'laptop.jpg'),
+('Smartphone', 'A new smartphone with cool features', 800.00, 'smartphone.jpg');
+
+INSERT INTO products (name, description, price, image_url)
+VALUES
+('Laptop', 'A high-performance laptop', 1200.00, 'laptop.jpg'),
+('Smartphone', 'A new smartphone with cool features', 800.00, 'smartphone.jpg');
+
+
+
+INSERT INTO products (name, description, price, image_url)
+VALUES
+('Tablet', 'A lightweight tablet for work and entertainment', 600.00, 'tablet.jpg'),
+('Headphones', 'Noise-cancelling wireless headphones', 200.00, 'headphones.jpg'),
+('Smartwatch', 'A smartwatch with fitness tracking features', 250.00, 'smartwatch.jpg'),
+('Camera', 'A digital camera with 4K video recording', 900.00, 'camera.jpg'),
+('Gaming Console', 'A next-gen gaming console for immersive gameplay', 500.00, 'console.jpg'),
+('Monitor', 'A 27-inch 4K UHD monitor', 350.00, 'monitor.jpg'),
+('Keyboard', 'A mechanical keyboard with RGB lighting', 100.00, 'keyboard.jpg'),
+('Mouse', 'An ergonomic wireless mouse', 50.00, 'mouse.jpg'),
+('External Hard Drive', 'A 2TB external hard drive for backup', 120.00, 'hard_drive.jpg'),
+('Speakers', 'High-quality Bluetooth speakers', 150.00, 'speakers.jpg');
+
+
+SELECT * FROM products
+
+
+#get those values for .env
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=abc123abc
+DB_NAME=ecommerce
+
+====================================================================
+
+
+
+mkdir ecommerce-app && cd ecommerce-app
+mkdir backend frontend 
+cd backend
+mkdir routes models config
+npm init -y
+npm install express mysql dotenv cors body-parser
+# Configure the Database Connection
+vim config/db.js
+# Add .env File
+vim .env
+# Create Product Routes
+vim routes/productRoutes.js
+# Create the Main Server File
+vim server.js
+# Start the backend
+node server.js
+
+===================================================================================
+
+
+
+cd ../frontend
+npx create-react-app .
+npm uninstall react react-dom
+npm install react...
+npm install
+
+cd src/
+mkdir components pages
+cd ..
+
+
+# Create a Navbar
+vim src/components/Navbar.js
+# Display Product List
+vim src/components/ProductList.js
+# Product Details Page
+vim src/components/ProductDetails.js
+# Cart Component
+vim src/components/Cart.js
+# Checkout Component
+vim src/components/Checkout.js
+# Fetch and Display Products, API URLs backend
+vim src/App.js
+
+# Start the Frontend
+npm start
+# Ensure CORS is enabled in the backend to allow requests from the frontend.
+# Visit http://localhost:3000 to see the backend API. Visit http://localhost:3001 to see the frontend.
