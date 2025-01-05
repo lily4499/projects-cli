@@ -1,0 +1,149 @@
+# Create kubernetes cluster
+gcloud auth application-default login
+
+#Use a Standalone Installation of the Google Cloud SDK
+
+sudo apt remove google-cloud-sdk -y
+curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-435.0.1-linux-x86_64.tar.gz
+tar -xvzf google-cloud-cli-435.0.1-linux-x86_64.tar.gz
+./google-cloud-sdk/install.sh
+source ./google-cloud-sdk/path.bash.inc
+
+gcloud components install gke-gcloud-auth-plugin
+
+gcloud auth login --no-launch-browser
+
+gcloud config set project [PROJECT_ID]
+
+#Enable the required APIs for GKE:
+gcloud services enable container.googleapis.com
+
+
+mkdir gke-terraform && cd gke-terraform
+
+
+gcloud container clusters create-auto minimal-cluster \
+    --region us-east4 \
+    --network default \
+    --subnetwork default \
+    --release-channel regular
+
+
+# Verify the Cluster
+
+#gcloud container clusters describe minimal-cluster --region us-east4
+gcloud container clusters get-credentials minimal-gke-cluster --region us-east4
+
+
+
+  ---------------------------
+
+  # Test Application Locally
+git clone the repos: https://github.com/lily4499/blog-nodejs-app.git
+cd blog-nodejs-app
+docker build -t blog-nodejs-app .
+docker run -d -p 3000:3000 --name my-node-container blog-nodejs-app
+
+# push a Docker image to Google Container Registry (GCR) 
+
+# Authenticate Docker with GCR
+gcloud auth configure-docker
+
+#Tag Your Docker Image
+docker tag blog-nodejs-app:latest gcr.io/dev-demo-pro/blog-nodejs-app:latest
+
+#Push the Docker Image to GCR
+docker push gcr.io/dev-demo-pro/blog-nodejs-app:latest
+
+
+# Verify the Image in GCR
+gcloud container images list
+
+
+-----------------------------------------
+
+Steps to Set Up and Demonstrate Autoscaler
+1. Create a Demo Application
+
+# demo-app.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo
+  template:
+    metadata:
+      labels:
+        app: demo
+    spec:
+      containers:
+      - name: demo-container
+        image: gcr.io/dev-demo-pro/blog-nodejs-app:latest
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 200m
+            memory: 400Mi
+        ports:
+        - containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-service
+spec:
+  selector:
+    app: demo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: LoadBalancer
+
+
+  --------------------
+
+  kubectl apply -f demo-app.yaml
+
+# Edit the GKE cluster configuration to enable cluster autoscaler:
+  gcloud container clusters update demo-cluster \
+    --enable-autoscaling \
+    --min-nodes=1 \
+    --max-nodes=5 \
+    --zone=us-east4-a
+
+    # Apply an HPA to scale the deployment based on CPU usage:
+
+    kubectl autoscale deployment demo-app --cpu-percent=50 --min=1 --max=10
+
+    # Generate traffic to the application to test autoscaling:
+
+    kubectl run load-generator --image=busybox \
+    --restart=Never -- \
+    sh -c "while true; do wget -q -O- http://demo-service.default.svc.cluster.local; done"
+
+
+ # Monitor Autoscaling
+
+ # Check the HPA status:
+ kubectl get hpa
+
+ # Check the number of pods:
+ kubectl get pods
+
+ # Monitor the cluster nodes:
+ gcloud container clusters describe demo-cluster --zone=us-east4-a | grep -i autoscaler
+
+
+# Clean Up
+
+ kubectl delete -f demo-app.yaml
+kubectl delete hpa demo-app
+kubectl delete pod load-generator
+gcloud container clusters delete minimal-cluster --zone=us-east4-a

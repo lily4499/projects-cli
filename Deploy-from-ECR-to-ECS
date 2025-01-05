@@ -1,0 +1,278 @@
+# Test app locally
+
+git clone https://github.com/lily4499/netflix-react-clone.git
+
+cd netflix-react-clone
+docker build -t netflix-react-app .
+docker run -d -p 80:80 netflix-react-app
+
+2. Build and Push Docker Image to ECR
+
+aws ecr create-repository --repository-name netflix-react-app
+
+
+# Authenticate Docker to ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 637423529262.dkr.ecr.us-east-1.amazonaws.com
+
+# Build the Docker image
+docker build -t netflix-react-app .
+
+# Tag the Docker image
+docker tag netflix-react-app:latest 637423529262.dkr.ecr.us-east-1.amazonaws.com/netflix-react-app:latest
+
+# Push the Docker image to ECR
+docker push 637423529262.dkr.ecr.us-east-1.amazonaws.com/netflix-react-app:latest
+
+
+-------------------------------------------------------
+
+3- Manually Deploy app to ECS
+
+# aws configure set region us-east-1
+
+# 1- Create an ECS Cluster
+aws ecs create-cluster --cluster-name lili-ecs-cluster
+
+# 2- Create an IAM Role for Task Execution
+
+vim ecs-task-assume-role-policy.json
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+
+aws iam create-role --role-name ecs_task_execution_role --assume-role-policy-document file://ecs-task-assume-role-policy.json
+
+# Attach the Execution Role Policy
+aws iam attach-role-policy --role-name ecs_task_execution_role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+# 3- Create a Task Definition
+vim container-definitions.json
+
+[
+  {
+    "name": "my-container",
+    "image": "637423529262.dkr.ecr.us-east-1.amazonaws.com/netflix-react-app:latest",
+    "portMappings": [
+      {
+        "containerPort": 80,
+        "hostPort": 80
+      }
+    ]
+  }
+]
+
+
+aws ecs register-task-definition \
+  --family my-task-family-test \
+  --execution-role-arn arn:aws:iam::637423529262:role/ecs_task_execution_role \
+  --network-mode awsvpc \
+  --requires-compatibilities FARGATE \
+  --cpu "1024" \
+  --memory "2048" \
+  --container-definitions file://container-definitions.json
+
+
+# 4- Create an ECS Service
+
+aws ecs create-service \
+  --cluster lili-ecs-cluster \
+  --service-name my-service \
+  --task-definition my-task-family-test \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration 'awsvpcConfiguration={
+      subnets=["subnet-062bafb72ff1b9c71"],
+      securityGroups=["sg-091906568d27d3894"],
+      assignPublicIp="ENABLED"}'
+
+
+
+-----------------------------------
+
+
+# Open app on browser: 
+
+# List the Running Tasks to get task ARN
+
+aws ecs list-tasks --cluster lili-ecs-cluster --service-name my-service
+
+# Describe the Task using its ARN to Look for the networkInterfaces
+aws ecs describe-tasks --cluster lili-ecs-cluster --tasks arn:aws:ecs:us-east-1:737423529262:task/lili-ecs-cluster/1234567890abcdef
+
+# Get the Public IP Address of the ENI
+
+aws ec2 describe-network-interfaces --network-interface-ids eni-0abcd1234efgh5678
+
+# In the output, locate the Association.PublicIp field. This is the public IP address of the task.
+http://3.92.123.45
+
+
+----------------------------------
+
+Clean Up
+
+# Delete the ECS Service
+aws ecs update-service --cluster lili-ecs-cluster --service-name my-service --desired-count 0
+aws ecs delete-service --cluster lili-ecs-cluster --service-name my-service --force
+
+#  Deregister the Task Definition
+aws ecs list-task-definitions
+
+aws ecs deregister-task-definition --task-definition my-task-family-test:1
+
+# Delete the ECS Cluster
+aws ecs delete-cluster --cluster lili-ecs-cluster
+
+# Detach the IAM Role Policy
+aws iam detach-role-policy --role-name ecs_task_execution_role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+# Delete the IAM Role
+
+aws iam delete-role --role-name ecs_task_execution_role
+
+# Elastic Network Interfaces (Optional)
+You may need to manually detach and delete ENIs if they are still in use.
+
+
+
+----------------------------------------------------
+
+
+AUTOMATE Deploy app to ECS USING JENKINS and terraform
+
+
+----------------------------------------------
+
+vim ecs-main.tf
+
+# Define the provider for AWS
+provider "aws" {
+  region = "us-east-1"  
+}
+
+# Create an ECS cluster
+resource "aws_ecs_cluster" "my_cluster" {
+  name = "lili-ecs-cluster"  
+}
+
+# Create a task definition
+resource "aws_ecs_task_definition" "my_task_definition" {
+  family                = "my-task-family-test"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 1024
+  memory                   = 2048
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  container_definitions = <<EOF
+[
+  {
+    "name": "my-container",
+    "image": "637423529262.dkr.ecr.us-east-1.amazonaws.com/netflix-react-app:latest",  
+    "portMappings": [
+      {
+        "containerPort": 80,
+        "hostPort": 80
+      }
+    ]
+  }
+]
+EOF
+}
+
+# Create a service to run the task on the cluster
+resource "aws_ecs_service" "my_service" {
+  name            = "my-service"
+  cluster         = aws_ecs_cluster.my_cluster.id
+  task_definition = aws_ecs_task_definition.my_task_definition.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = ["subnet-062bafb72ff1b9c71"]  
+    security_groups  = ["sg-091906568d27d3894"]      
+    assign_public_ip = true
+  }
+}
+
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "ecs_task_execution_role"
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  role       = aws_iam_role.ecs_task_execution_role.name
+}
+
+
+----------------------------------------------
+
+vim Jenkinsfile
+
+pipeline {
+    agent any
+
+    parameters {
+    choice choices: ['apply', 'destroy'], description: 'Please enter your option or action', name: 'action'
+     }
+
+    environment {
+        AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_DEFAULT_REGION = "us-east-1"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+           git branch: 'main', url: 'https://github.com/lily4499/netflix-react-clone.git'
+  
+            }
+        }
+    
+        stage ("terraform init") {
+            steps {
+                sh "terraform init" 
+            }
+        }
+  
+        stage ("plan") {
+            steps {
+                sh "terraform plan" 
+            }
+        }
+        stage (" Action") {
+            steps {
+                sh 'terraform ${action} --auto-approve' 
+           }
+        }
+    }
+}
+
+
+# Push code to github
+
+# Create Jenkins job to run terraform and deploy app
+
+# Clean up  ECR, ECS

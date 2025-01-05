@@ -1,0 +1,204 @@
+Provision Cluster
+---------------------main.tf -----------------------------
+provider "azurerm" {
+    features {}
+}
+
+variable "cluster_name" {
+    default = "my-aks-cluster"
+}
+variable "location" {
+    default = "eastus"
+}
+variable "resource_group_name" {
+    default = "my-resource-group"
+}
+variable "dns_prefix" {
+    default = "myaks"
+}
+variable "node_count" {
+    default = 1
+}
+
+resource "azurerm_resource_group" "aks_rg" {
+  name     = var.resource_group_name
+  location = var.location
+}
+
+resource "azurerm_kubernetes_cluster" "aks" {
+  name                = var.cluster_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.aks_rg.name
+  dns_prefix          = var.dns_prefix
+
+  default_node_pool {
+    name       = "default"
+    node_count = var.node_count
+    vm_size    = "Standard_DS2_v2"
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+}
+
+--------------
+
+
+terraform init
+terraform apply --auto-approve
+
+az aks get-credentials --resource-group my-resource-group --name my-aks-cluster
+kubectl get nodes
+
+------------------------------------------
+
+
+
+# Test Application Locally
+git clone the repos: https://github.com/lily4499/blog-nodejs-app.git
+cd blog-nodejs-app
+docker build -t blog-nodejs-app .
+docker run -d -p 3000:3000 --name my-node-container blog-nodejs-app
+
+#Create Pipeline Job(s)
+Job to build and push image to docker registry; then, trigger second job with IMAGETAG as string parameter
+https://github.com/lily4499/blog-nodejs-app.git
+
+Job to update manifest files with the new image build in git reppo
+https://github.com/lily4499/blog-nodejs-rollout.git
+
+----------------------------------
+
+#Deploy Argocd
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+argocd admin initial-password -n argocd
+
+--------------------------------
+
+#Deploy Argo Rollouts controller onto your Cluster
+
+kubectl create namespace argo-rollouts
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+#install argo-rollout kubectl plugin with below commands
+
+curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+chmod +x ./kubectl-argo-rollouts-linux-amd64
+sudo mv ./kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
+#access argo rollout Dashboard
+
+kubectl argo rollouts dashboard 
+localhost:3100/rollouts
+
+
+-------------------------------------
+
+kubectl get svc -n argocd
+#go to browser= elb
+
+#Create An Application From A Git Repository
+argocd app create blog-nodejs-app --repo https://github.com/lily4499/blog-nodejs-rollout.git --path ./ --dest-server https://kubernetes.default.svc --dest-namespace default
+argocd app list
+
+
+#Sync (Deploy) The Application
+argocd app sync blog-nodejs-app
+
+kubectl get svc
+
+------------------------------------
+
+
+#push a change to the repo and see argo rollout in action
+Watch the changes on the argo rollout dash board and try to access application
+
+#Commit and Push Changes
+git add .
+git commit -m "Update Rollout with new image v2"
+git push origin main
+
+# Deploy the Update to Kubernetes
+
+This will:
+
+Deploy the new version (v2) to the preview service (blog-nodejs-app-preview).
+Leave the current version (v1) live on the active service (blog-nodejs-app-active).
+
+#Validate the Preview
+kubectl get svc blog-nodejs-app-preview
+
+
+#Promote to Active
+kubectl argo rollouts promote blog-nodejs-app
+
+This will:
+Shift traffic from the active service (green) to the preview service (blue).
+Make the blue version live as the new active version.
+
+
+#Monitor the Rollout
+kubectl argo rollouts get rollout blog-nodejs-app
+
+#Verify Old Pods Are Deleted: Check if the previous version's pods are gone:
+kubectl get pods -l app=blog-nodejs-app
+
+#Rollback (If Needed)
+kubectl argo rollouts undo blog-nodejs-app
+
+#Confirm Rollback: Validate that the previous version is running:
+kubectl get pods -l app=blog-nodejs-app
+kubectl argo rollouts get rollout blog-nodejs-app
+
+
+
+---------------------------------
+
+#Clean up
+
+argocd app list
+argocd app delete blog-nodejs-app
+
+kubectl delete all --all
+
+terraform destroy --auto-approve
+
+
+======================================================
+
+
+
+===============================================================
+
+
+
+
+Ensuring Rollback is Possible
+To ensure rollbacks work even if pods are deleted after a promotion, follow these best practices:
+
+1. Retain Revision History
+Ensure the Rollout resource specifies a revisionHistoryLimit. This determines how many replica sets are retained for rollback.
+
+spec:
+  revisionHistoryLimit: 5  # Retain up to 5 old revisions
+
+
+2. Enable Health Checks
+Configure health checks for both the activeService and the previewService. If issues are detected after promotion, you can manually or automatically trigger a rollback.
+
+spec:
+  strategy:
+    blueGreen:
+      activeService: blog-nodejs-app-active
+      previewService: blog-nodejs-app-preview
+      autoPromotionEnabled: false
+    progressDeadlineSeconds: 600
+
+
+3. Validate Replica Sets
+Check the available replica sets in the cluster to confirm that the old version is retained:
+
+kubectl get rs -l app=blog-nodejs-app

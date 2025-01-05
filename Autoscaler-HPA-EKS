@@ -1,0 +1,254 @@
+Setting up an Autoscaler on Amazon EKS involves configuring both the Horizontal Pod Autoscaler (HPA) for scaling workloads within a cluster and the Cluster Autoscaler (CA) for scaling nodes in the cluster. Below is a step-by-step guide using a demo application:
+1. Prerequisites
+
+    Amazon EKS Cluster: Ensure you have an EKS cluster running. You can use eksctl or the AWS Management Console to set it up.
+    kubectl: Ensure kubectl is installed and configured for your EKS cluster.
+    AWS CLI: Ensure aws-cli is installed and configured.
+    IAM Roles: Ensure your EKS worker nodes have the appropriate IAM roles attached.
+---------------------------------
+
+# Provison EKS
+
+eksctl create cluster \
+  --name my-cluster \
+  --region us-east-1 \
+  --nodegroup-name standard-nodes \
+  --node-type t3.medium \
+  --nodes 1 \
+  --nodes-min 1 \
+  --nodes-max 3 \
+  --managed
+
+
+kubectl get nodes
+------------------------------------
+
+
+2. Setup Horizontal Pod Autoscaler (HPA)
+
+HPA scales pods based on CPU or memory usage.
+Step 1. Deploy a Sample Application
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      containers:
+      - name: demo-app
+        image: laly9999/demo-node-app:latest
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-service
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+  selector:
+    app: demo-app
+
+
+----------------------
+
+kubectl apply -f demo-app.yaml
+
+
+# HPA requires a metrics server. Deploy it using the official Helm chart:
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+
+# Verify metrics server is working:
+kubectl get apiservices | grep metrics
+
+# Create an HPA
+kubectl autoscale deployment demo-app --cpu-percent=50 --min=1 --max=5
+
+# Check HPA status:
+kubectl get hpa
+
+# Use a tool like hey or siege to simulate traffic:
+# Launch a Load Generator Pod
+kubectl run -i --tty load-generator --image=busybox -- /bin/sh
+
+# using a LoadBalancer service, replace http://demo-service with the LoadBalancer's external IP or DNS name.
+kubectl get service demo-service
+
+# Simulate Continuous Requests
+while true; do wget -q -O- http://demo-service; done
+
+# Monitor Kubernetes Workloads
+kubectl get pods -o wide
+kubectl get deployment demo-app
+kubectl get hpa -w
+
+kubectl get nodes
+kubectl get nodes -w
+kubectl logs -f deployment/cluster-autoscaler -n kube-system
+
+
+
+# To stop the infinite loop, press Ctrl+C.
+
+# To delete the pod when done:
+kubectl delete pod load-generator
+
+
+
+-------------------------------------
+
+# Setup Cluster Autoscaler (CA)
+
+# CA scales nodes based on pending pods.
+
+
+-------------------
+# List your EKS worker node instance profiles:
+aws iam list-instance-profiles | grep my-cluster
+
+# Retrieve the IAM role associated with the worker node instance profile:
+aws iam get-instance-profile --instance-profile-name <InstanceProfileName>
+
+# Attach the IAM Policy
+vim autoscaler-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "autoscaling:DescribeAutoScalingGroups",
+                "autoscaling:DescribeAutoScalingInstances",
+                "autoscaling:DescribeLaunchConfigurations",
+                "autoscaling:DescribeTags",
+                "autoscaling:SetDesiredCapacity",
+                "autoscaling:TerminateInstanceInAutoScalingGroup"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+
+# Create the policy:
+aws iam create-policy \
+    --policy-name EKSClusterAutoscalerPolicy \
+    --policy-document file://autoscaler-policy.json
+
+# Attach the custom policy to the role:
+aws iam attach-role-policy \
+    --policy-arn arn:aws:iam::637423529262:policy/EKSClusterAutoscalerPolicy \
+    --role-name <WorkerNodeRoleName>
+
+
+# Verify Policy Attachment
+aws iam list-attached-role-policies --role-name <WorkerNodeRoleName>
+----------------------------
+
+# To retrieve the <WorkerNodeRoleName> for your EKS worker nodes
+# List the Node Group Names
+aws eks list-nodegroups --cluster-name <YourClusterName>
+
+# Retrieve the details of the node group to get the IAM role associated with it:
+aws eks describe-nodegroup --cluster-name <YourClusterName> --nodegroup-name standard-nodes
+
+# Look for the nodeRole field in the output:
+{
+    "nodegroup": {
+        "nodeRole": "arn:aws:iam::123456789012:role/<WorkerNodeRoleName>"
+    }
+}
+
+
+----------------------------------
+
+Step 2. Deploy Cluster Autoscaler
+### https://github.com/ooghenekaro/cluster-autoscaler-yaml-sample/blob/main/ca.yml
+
+# Use the official Helm chart or YAML manifests:
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/autoscaler/cluster-autoscaler-release-1.27/cluster-autoscaler-autodiscover.yaml
+
+# Edit the deployment to include your cluster name and necessary configurations:
+kubectl edit deployment cluster-autoscaler -n kube-system
+
+Update the command section:
+containers:
+- command:
+  - ./cluster-autoscaler
+  - --v=4
+  - --stderrthreshold=info
+  - --cloud-provider=aws
+  - --skip-nodes-with-local-storage=false
+  - --nodes=1:10:<NodeGroupName>  # standard-nodes
+env:
+  - name: AWS_REGION
+    value: <your-region>  # Example: us-east-1
+  - name: CLUSTER_NAME
+    value: <your-cluster-name>  # Replace with your= my-cluster
+
+
+--------------------------
+
+Step 3. Tag the Auto Scaling Group
+
+ # Tag the ASG for your worker nodes:
+
+aws autoscaling create-or-update-tags --tags \
+    ResourceId=<AutoScalingGroupName>,ResourceType=auto-scaling-group,Key=k8s.io/cluster-autoscaler/enabled,Value=true,PropagateAtLaunch=true \
+    ResourceId=<AutoScalingGroupName>,ResourceType=auto-scaling-group,Key=k8s.io/cluster-autoscaler/<ClusterName>,Value=true,PropagateAtLaunch=true
+
+
+## RGet details about the node group and find the ASG:
+aws eks describe-nodegroup --cluster-name my-cluster --nodegroup-name standard-nodes \
+    --query "nodegroup.resources.autoScalingGroups[].name" --output text
+
+
+----------------------------
+
+Step 4. Monitor Autoscaler Logs
+
+kubectl logs -f deployment/cluster-autoscaler -n kube-system
+
+-----------------------
+
+4. Verify the Setup
+
+    Generate load to increase pod CPU usage and observe the HPA creating new pods.
+    Check the Cluster Autoscaler logs to see nodes being scaled up or down based on pod demands.
+
+---------------------
+
+# Demo Application Endpoint
+
+Retrieve the LoadBalancer's external IP:
+
+kubectl get service demo-service
+
+Access the demo application in your browser.
+
+---------------------
+
+Clean up
+
+kubectl delete all --all
+
+eksctl delete cluster --name my-cluster
